@@ -39,23 +39,43 @@ export class YtDlpExtractor implements VideoExtractor {
   }
 
   async extract(context: ExtractionContext): Promise<ExtractorOutcome> {
-    let stdout: string;
+    const commands = [
+      { cmd: "yt-dlp", args: [] },
+      { cmd: "python", args: ["-m", "yt_dlp"] }
+    ];
 
-    try {
-      const result = await execFileAsync("python", ["-m", "yt_dlp", "--dump-single-json", "--no-playlist", "--ignore-errors", "--no-check-certificates", "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36", context.sourceUrl], {
-        timeout: 30000,
-        maxBuffer: 1024 * 1024 * 8
-      });
-      stdout = result.stdout;
-    } catch (error) {
-      // If yt-dlp fails but still produces some stdout (sometimes happens with --ignore-errors), use it
-      if (typeof error === "object" && error && "stdout" in error && typeof error.stdout === "string" && error.stdout.trim()) {
-        stdout = error.stdout;
-      } else {
-        throw new AppError("UPSTREAM_UNAVAILABLE", getYtDlpMessage(error), 502, {
-          cause: error instanceof Error ? error.message : "unknown"
+    let stdout: string = "";
+    let lastError: any;
+
+    for (const { cmd, args } of commands) {
+      try {
+        const fullArgs = [
+          ...args,
+          "--dump-single-json",
+          "--no-playlist",
+          "--no-check-certificates",
+          "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+          "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          context.sourceUrl
+        ];
+        
+        const result = await execFileAsync(cmd, fullArgs, {
+          timeout: 30000,
+          maxBuffer: 1024 * 1024 * 12
         });
+        
+        stdout = result.stdout;
+        if (stdout.trim()) break;
+      } catch (error) {
+        lastError = error;
+        continue;
       }
+    }
+
+    if (!stdout.trim()) {
+      throw new AppError("UPSTREAM_UNAVAILABLE", getYtDlpMessage(lastError), 502, {
+        cause: lastError instanceof Error ? lastError.message : "unknown"
+      });
     }
 
     const payload = parsePayload(stdout);

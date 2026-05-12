@@ -1,163 +1,117 @@
-# Link2Download
+# Link2Download: Universal Media Extraction Pipeline
 
-Link2Download extracts downloadable video stream URLs from webpages or direct media URLs and returns normalized download entries for MP4, HLS, and DASH sources. It explicitly rejects DRM-protected media and does not attempt to bypass access controls.
+Link2Download is a high-performance video stream extraction engine built on Next.js 15. It identifies, normalizes, and proxies media streams (HLS, DASH, MP4) from disparate web sources while strictly adhering to a "No DRM" policy.
 
-## Architecture
+Designed for reliability and observability, it features a plugin-based architecture for provider-specific extraction, built-in SSRF protection, and a robust proxy layer to bypass common CDN blocks.
 
-The app uses Next.js App Router for the product UI and REST route handlers. Business logic lives outside route files:
+---
 
-- `src/features/extraction`: UI, hooks, DTOs, client API calls, and feature state.
-- `src/server/extractors`: extractor contracts, registry, DRM checks, direct media extraction, HLS/DASH parsing, generic HTML extraction, JW Player detection, and `yt-dlp` adapter.
-- `src/server/extraction`: application service that validates URLs, resolves pages, executes extractors, normalizes streams, and stores results.
-- `src/server/repositories`: persistence contracts with Prisma-backed production storage and local/test fallback.
-- `src/infrastructure`: Prisma, Redis, and BullMQ wiring.
-- `src/shared`: UI primitives, request handling, errors, logging, SSRF protection, and rate limiting.
+## 🏗️ Architecture & Philosophy
 
-Routes are intentionally thin. They validate DTOs, apply request controls, and call services.
+The project follows a **Feature-Driven Clean Architecture** pattern. Logic is strictly decoupled from the delivery layer (API routes/UI).
 
-## Engineering Decisions
+### Core Layers
 
-- **Plugin extraction model:** extractors implement a common contract and are selected through a registry. Provider-specific extractors can be added without changing route handlers.
-- **Direct media support:** direct `.mp4`, `.m3u8`, and `.mpd` URLs are handled before webpage extraction.
-- **DRM boundary:** Widevine, FairPlay, PlayReady, encrypted manifest markers, and EME usage produce `DRM_PROTECTED`.
-- **SSRF protection:** only HTTP(S) URLs are accepted, DNS resolution is checked, and non-public IP ranges are blocked.
-- **Typed configuration:** environment variables are parsed with Zod at startup.
-- **Persistence:** Prisma/PostgreSQL is used when `DATABASE_URL` is configured. Tests and lightweight local runs can use the in-memory repository.
-- **Queues:** BullMQ is wired for asynchronous extraction workloads when `REDIS_URL` is present.
-- **TV Series Discovery:** Advanced crawling logic identifies episodes and seasons for supported providers, enabling bulk extraction and deep scanning.
+- **`src/features/*`**: Domain-specific UI, state management, and client-side logic.
+- **`src/server/extractors`**: A registry of provider-specific plugins. Each extractor is a self-contained module implementing a standard contract.
+- **`src/server/extraction`**: The orchestrator service. Handles validation, concurrent extraction attempts, normalization, and persistence.
+- **`src/app/api/proxy`**: A specialized proxy layer that propagates essential headers (Referer, Origin, User-Agent) to bypass bot detection on media CDNs.
 
-## Key Features
+### Engineering Standards
 
-- **Universal Engine**: Auto-detects HLS, DASH, and direct MP4 streams from any URL.
-- **Header Propagation**: Custom proxy system that bypasses CDN blocks (Cloudflare, etc.) by mimicking browser behavior and propagating essential headers.
-- **Deep Scan Series**: Automates the discovery of entire TV series, providing individual episode access and bulk link export.
-- **Professional Downloader**: FFmpeg-powered stable downloading for high-quality streams.
+- **DRM Boundary**: Explicit rejection of Widevine, FairPlay, and PlayReady signals.
+- **SSRF Hardening**: Strict URL validation, DNS resolution checks, and blocking of non-public IP ranges.
+- **Typed Config**: Environment variables are validated at runtime using Zod.
+- **Resilient Proxying**: Intelligent manifest rewriting for HLS/DASH to ensure all segments flow through the authenticated proxy path.
 
-## Setup
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- **Node.js**: 20+ 
+- **FFmpeg**: Required for stream processing/downloading.
+- **yt-dlp**: Required for generic fallback support.
+
+### Installation
 
 ```bash
+# Install dependencies
 npm install
+
+# Generate database client (Prisma)
 npm run prisma:generate
+
+# Configure environment
 cp .env.example .env
+
+# Start development server
 npm run dev
 ```
 
-Install media tools on the host or container image:
+The application will be available at `http://localhost:3001`.
+
+---
+
+## 🔧 Environment Configuration
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | `undefined` | PostgreSQL connection string. |
+| `REDIS_URL` | `undefined` | Redis connection for BullMQ and caching. |
+| `EXTRACTION_TIMEOUT_MS` | `15000` | Timeout for upstream provider requests. |
+| `RATE_LIMIT_MAX` | `30` | Max requests per minute per IP. |
+
+---
+
+## 🛠️ Development Workflow
+
+### Adding a New Extractor
+
+1. Create a new class in `src/server/extractors/custom/` implementing the `VideoExtractor` contract.
+2. Define `canHandle(context)` logic based on domain or HTML patterns.
+3. Implement `extract(context)` to return a normalized `ExtractorOutcome`.
+4. Register the new extractor in `src/server/extractors/registry.ts`.
+
+### Testing
 
 ```bash
-yt-dlp --version
-ffmpeg -version
-```
-
-## Environment Variables
-
-| Name | Required | Description |
-| --- | --- | --- |
-| `NEXT_PUBLIC_APP_URL` | No | Public app URL. Defaults to `http://localhost:3001`. |
-| `DATABASE_URL` | Production | PostgreSQL connection string for Prisma. |
-| `REDIS_URL` | Production | Redis connection string for BullMQ and distributed caching. |
-| `EXTRACTION_TIMEOUT_MS` | No | Upstream request timeout. Defaults to `15000`. |
-| `RATE_LIMIT_WINDOW_MS` | No | Rate-limit window. Defaults to `60000`. |
-| `RATE_LIMIT_MAX` | No | Requests per window. Defaults to `30`. |
-| `ALLOWED_ORIGINS` | No | Comma-separated CORS allowlist. |
-
-## Docker
-
-```bash
-docker compose up --build
-```
-
-The compose stack starts Next.js, PostgreSQL, and Redis.
-
-## API
-
-### `POST /api/extract`
-
-```json
-{ "url": "https://example.com/watch/video" }
-```
-
-Success:
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": "abc123",
-    "status": "completed",
-    "streams": []
-  },
-  "requestId": "req_123"
-}
-```
-
-DRM response:
-
-```json
-{
-  "success": false,
-  "code": "DRM_PROTECTED",
-  "message": "This content is DRM protected and cannot be downloaded."
-}
-```
-
-Other endpoints:
-
-- `GET /api/extract/:id`
-- `POST /api/download`
-- `GET /api/history`
-
-## Extractor Plugin Guide
-
-Create a class implementing `VideoExtractor`:
-
-```ts
-export class AcmeExtractor implements VideoExtractor {
-  readonly name = "acme";
-
-  canHandle(context: ExtractionContext) {
-    return context.sourceUrl.includes("acme.example");
-  }
-
-  async extract(context: ExtractionContext): Promise<ExtractorOutcome> {
-    // Fetch public data, call DRM checks, and return normalized streams.
-  }
-}
-```
-
-Register it in `src/server/extractors/registry.ts` before the generic fallback.
-
-## Queue Architecture
-
-BullMQ is configured in `src/infrastructure/queue/extraction-queue.ts` with retry and exponential backoff. The worker entrypoint in `src/workers/extraction-worker.ts` delegates to `ExtractionService`, keeping synchronous API behavior and async queue behavior on the same application service.
-
-## Testing
-
-```bash
-npm run typecheck
+# Run unit and integration tests
 npm run test
+
+# Run API-specific test suite
+npm run test:api
+
+# Verify type integrity
+npm run typecheck
 ```
 
-Tests cover DRM rejection, manifest parsing, UI primitives, and API response envelopes.
+---
 
-## Deployment
+## 🐳 Deployment
 
-1. Provision PostgreSQL and Redis.
-2. Set environment variables.
-3. Install `yt-dlp` and `ffmpeg` in the runtime image.
-4. Run `npm run prisma:generate`.
-5. Run Prisma migrations.
-6. Build with `npm run build`.
-7. Start with `npm run start`.
+The project includes a multi-stage `Dockerfile` and `docker-compose.yml` for production-ready deployment.
 
-## Scaling Strategy
+```bash
+docker compose up --build -d
+```
 
-Run the Next.js app horizontally behind a load balancer. Move expensive extraction work to BullMQ workers backed by Redis. Store extraction records in PostgreSQL and introduce object storage only if future features persist thumbnails or generated artifacts.
+This stack initializes:
+1. **Next.js App**: Running in production mode.
+2. **PostgreSQL**: For persistent extraction history.
+3. **Redis**: For job queuing and rate limiting.
 
-## Contributing
+---
 
-- Use conventional commits.
-- Keep route handlers thin.
-- Add extractor-specific tests for every new provider.
-- Do not add logic that bypasses DRM, authentication, signed URL restrictions, or network access controls.
-- Prefer small modules with explicit contracts over shared utility sprawl.
+## 🤝 Contributing
+
+We maintain a high bar for code quality and security:
+- **Conventional Commits**: All commits must follow the conventional commit specification.
+- **Thin Handlers**: UI components and API routes should contain zero business logic.
+- **No DRM Bypass**: Do not submit PRs that attempt to circumvent encryption or authentication systems.
+- **Security First**: All new extractors must be audited for SSRF vulnerabilities.
+
+---
+
+&copy; 2026 Link2Download / Engineering Team

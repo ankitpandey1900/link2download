@@ -5,12 +5,32 @@ import fs from "fs";
 
 export async function GET(request: NextRequest) {
   // Use absolute path to bypass Next.js bundling issues
+  let ffmpegPath: string | undefined;
   const ffmpegName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-  const ffmpegPath = path.join(process.cwd(), "node_modules", "ffmpeg-static", ffmpegName);
 
-  if (!fs.existsSync(ffmpegPath)) {
+  // 1. Try local node_modules first (best for Windows/Local)
+  const localPath = path.join(process.cwd(), "node_modules", "ffmpeg-static", ffmpegName);
+  
+  if (fs.existsSync(localPath)) {
+    ffmpegPath = localPath;
+  } else {
+    // 2. Try dynamic import (best for Netlify/Serverless bundling)
+    try {
+      const ffmpegStatic = await import("ffmpeg-static");
+      ffmpegPath = ffmpegStatic.default || (ffmpegStatic as any);
+    } catch (e) {
+      console.warn("Failed to import ffmpeg-static dynamically");
+    }
+  }
+
+  if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
     console.error(`FFmpeg not found at: ${ffmpegPath}`);
-    return new Response("FFmpeg binary not found", { status: 500 });
+    // Fallback for some Linux environments
+    if (process.platform !== "win32" && fs.existsSync("/usr/bin/ffmpeg")) {
+        ffmpegPath = "/usr/bin/ffmpeg";
+    } else {
+        return new Response("FFmpeg binary not found", { status: 500 });
+    }
   }
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get("url");
@@ -62,12 +82,26 @@ export async function GET(request: NextRequest) {
     // console.log(`ffmpeg: ${data}`);
   });
 
-  ffmpeg.on("close", async () => {
+  ffmpeg.on("error", (err) => {
+    console.error(`[Download] FFmpeg process error: ${err.message}`);
+    writer.abort(err).catch(() => {});
+  });
+
+  ffmpeg.on("close", async (code) => {
+    if (code !== 0 && code !== null) {
+        console.warn(`[Download] FFmpeg closed with code ${code}`);
+    }
     try {
       await writer.close();
     } catch (e) {
-      // Stream already closed or error-ed, ignore
+      // Stream already closed or aborted
     }
+  });
+
+  // Handle client-side disconnection
+  request.signal.addEventListener("abort", () => {
+    ffmpeg.kill("SIGKILL");
+    writer.abort().catch(() => {});
   });
 
   return new Response(readable, {

@@ -16,7 +16,7 @@
     "test:api": "vitest run tests/api",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prepare": "husky"
+    "prepare": "node -e \"if (process.env.CI !== 'true') { try { require('child_process').execSync('husky'); } catch (e) {} }\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",

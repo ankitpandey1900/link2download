@@ -9,12 +9,10 @@ export async function GET(request: NextRequest) {
     return new NextResponse("Missing URL", { status: 400 });
   }
 
-  try {
-    console.log(`[Proxy] Fetching: ${targetUrl}`);
-    
+    try {
     const referer = searchParams.get("referer") || "https://brightpathsignals.com/";
     const origin = searchParams.get("origin") || "https://brightpathsignals.com";
-    const ua = searchParams.get("ua") || request.headers.get("user-agent") || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    const ua = searchParams.get("ua") || request.headers.get("user-agent") || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     
     const headers: Record<string, string> = {
       "User-Agent": ua,
@@ -22,7 +20,9 @@ export async function GET(request: NextRequest) {
       "Accept-Language": "en-US,en;q=0.9",
       "Referer": referer,
       "Origin": origin,
-      "Connection": "keep-alive",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "cross-site",
       "Cache-Control": "no-cache",
       "Pragma": "no-cache"
     };
@@ -33,8 +33,14 @@ export async function GET(request: NextRequest) {
     });
 
     if (!response.ok) {
-      console.error(`[Proxy] Target rejected request: ${response.status} ${response.statusText}`);
-      return new NextResponse(`Proxy error: ${response.statusText}`, { status: response.status });
+      console.error(`[Proxy] Target rejected request: ${response.status} ${response.statusText} for URL: ${targetUrl}`);
+      // Return the original error but with CORS headers so the client can see it
+      return new NextResponse(`Proxy error: ${response.statusText}`, { 
+        status: response.status,
+        headers: {
+            "Access-Control-Allow-Origin": "*"
+        }
+      });
     }
 
     const contentType = response.headers.get("content-type") || "";
@@ -45,41 +51,43 @@ export async function GET(request: NextRequest) {
         const baseDir = targetUrl.substring(0, targetUrl.lastIndexOf("/") + 1);
         
         const proxyParams = new URLSearchParams();
-        proxyParams.set("referer", referer);
-        proxyParams.set("origin", origin);
-        proxyParams.set("ua", ua);
+        if (referer) proxyParams.set("referer", referer);
+        if (origin) proxyParams.set("origin", origin);
+        if (ua) proxyParams.set("ua", ua);
 
         // Rewrite relative links (not starting with http or /)
-        text = text.replace(/^(?!(?:https?|ftp):\/\/|#|\/)(.*)$/gm, (match) => {
-            if (!match.trim()) return match;
-            const absoluteUrl = new URL(match, baseDir).toString();
+        text = text.replace(/^(?!(?:https?|ftp):\/\/|#|\/)(.+)$/gm, (match) => {
+            const line = match.trim();
+            if (!line) return match;
+            const absoluteUrl = new URL(line, baseDir).toString();
             return `/api/proxy?url=${encodeURIComponent(absoluteUrl)}&${proxyParams.toString()}`;
         });
         
         // Rewrite absolute path links (starting with /)
-        text = text.replace(/^\/(?!\/)(.*)$/gm, (match) => {
-            const absoluteUrl = new URL(match, new URL(targetUrl).origin).toString();
+        text = text.replace(/^\/(?!\/)(.+)$/gm, (match) => {
+            const line = match.trim();
+            const absoluteUrl = new URL(line, new URL(targetUrl).origin).toString();
             return `/api/proxy?url=${encodeURIComponent(absoluteUrl)}&${proxyParams.toString()}`;
         });
         
         // Rewrite fully qualified links
         text = text.replace(/^(https?:\/\/.*)$/gm, (match) => {
-            return `/api/proxy?url=${encodeURIComponent(match)}&${proxyParams.toString()}`;
+            const line = match.trim();
+            return `/api/proxy?url=${encodeURIComponent(line)}&${proxyParams.toString()}`;
         });
 
         return new NextResponse(text, {
             headers: {
                 "Content-Type": contentType,
                 "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "no-cache"
+                "Cache-Control": "no-cache",
+                "X-Proxy-Source": "Link2Download"
             }
         });
     }
 
     // For other files (segments, mp4), use streaming
-    const body = response.body;
-
-    return new NextResponse(body, {
+    return new NextResponse(response.body, {
       headers: {
         "Content-Type": contentType || "application/octet-stream",
         "Access-Control-Allow-Origin": "*",
@@ -87,6 +95,12 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
+    // Suppress common streaming errors that occur when client aborts
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes("ResponseAborted") || errorMessage.includes("aborted")) {
+        return new NextResponse(null, { status: 499 }); // Client Closed Request
+    }
+
     console.error("[Proxy] Critical failure:", error);
     return new NextResponse("Proxy failure", { status: 500 });
   }

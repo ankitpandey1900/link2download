@@ -43,15 +43,24 @@ export class BrightPathExtractor implements VideoExtractor {
 
     async extractEpisode(imdbId: string, s: string, e: string, mediaType: string = "movie", sourceUrl?: string): Promise<ExtractorOutcome> {
         const playerUrl = `https://brightpathsignals.com/embed/${mediaType}/${imdbId}${mediaType === "tv" ? `/${s}/${e}` : ""}`;
+        const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
         // 2. Touch the player page to establish a session (cookies)
         const playerRes = await fetchWithTimeout(playerUrl, {
             headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "User-Agent": userAgent,
                 "Referer": "https://streamimdb.ru/"
             }
         });
-        const cookies = playerRes.headers.get("set-cookie") || "";
+        
+        // Properly parse cookies from set-cookie header
+        const setCookieHeaders = playerRes.headers.get("set-cookie");
+        let cookies = "";
+        if (setCookieHeaders) {
+            // Extract only the name=value part of each cookie, ignoring attributes like Path, Expires, etc.
+            cookies = setCookieHeaders.split(/,(?=[^;]*=)/).map(c => c.split(";")[0].trim()).join("; ");
+        }
+        
         const playerHtml = await playerRes.text();
 
         // 3. Extract the real API URL from CONFIG if present, otherwise use known default
@@ -72,7 +81,7 @@ export class BrightPathExtractor implements VideoExtractor {
 
         const apiRes = await fetchWithTimeout(apiUrl, {
             headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "User-Agent": userAgent,
                 "Referer": playerUrl,
                 "Origin": "https://brightpathsignals.com",
                 "Cookie": cookies
@@ -99,9 +108,9 @@ export class BrightPathExtractor implements VideoExtractor {
         }
         
         const streamHeaders = {
-            "Referer": "https://brightpathsignals.com/",
+            "Referer": playerUrl,
             "Origin": "https://brightpathsignals.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "User-Agent": userAgent
         };
 
         for (const url of data.stream_urls) {

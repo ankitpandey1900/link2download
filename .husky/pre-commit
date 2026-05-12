@@ -1,8 +1,6 @@
 #!/bin/sh
-# .husky/pre-commit
-# Skip if npx is not available (e.g. during Netlify repo preparation)
-if ! command -v npx >/dev/null 2>&1; then
-  echo "npx not found, skipping pre-commit hook."
+# Skip if npx is not available or if we are in CI
+if [ "$CI" = "true" ] || ! command -v npx >/dev/null 2>&1; then
   exit 0
 fi
 
