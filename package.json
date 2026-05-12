@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:api": "vitest run tests/api",
+    "test:api": "vitest run src/tests/api",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prepare": "node -e \"if (process.env.CI !== 'true') { try { require('child_process').execSync('husky'); } catch (e) {} }\""
