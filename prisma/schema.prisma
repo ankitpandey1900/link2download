@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Extraction {
+  id        String   @id
+  url       String   @unique
+  status    String
+  metadata  Json
+  streams   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  downloads Download[]
+
+  @@index([createdAt])
+}
+
+model Download {
+  id           String     @id
+  streamId     String
+  streamUrl    String
+  createdAt    DateTime   @default(now())
+  extraction   Extraction @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+  extractionId String
+
+  @@index([extractionId])
+}
